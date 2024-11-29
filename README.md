@@ -126,6 +126,7 @@ You can modify BTConfig.json to adjust settings:
 * May not work with all Bluetooth device types
 * Some devices might require specific keep-alive intervals
 * Service requires system restart after major Windows updates
+* ⚠️ **Current Status**: The service reduces but does not completely eliminate the standby gap when audio playback starts. This is being actively worked on.
 
 **Troubleshooting**
 
@@ -139,6 +140,7 @@ Check the following logs for issues:
 
 This project is under active development. Current focus areas:
 
+* 🚧 **Priority**: Eliminating the audio playback gap
 * ⏳ Automatic standby timeout detection
 * 🔄 Dynamic interval adjustment
 * 🔧 Device-specific optimization
