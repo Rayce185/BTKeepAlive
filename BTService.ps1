@@ -1,27 +1,25 @@
-if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) { Start-Process powershell.exe "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs; exit }
+if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) { 
+    Start-Process powershell.exe "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
+    exit 
+}
 
-# Service script for Bluetooth Keep-Alive
+# Enable detailed error logging
 $ErrorActionPreference = "Stop"
+$VerbosePreference = "Continue"
 
-# Initial startup logging
-$startupLog = Join-Path $PSScriptRoot "startup.log"
 try {
-    "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') Service script starting" | Out-File -FilePath $startupLog
-    "PowerShell Version: $($PSVersionTable.PSVersion)" | Out-File -FilePath $startupLog -Append
-    "Script Path: $PSCommandPath" | Out-File -FilePath $startupLog -Append
-    "Working Directory: $PWD" | Out-File -FilePath $startupLog -Append
-} catch {
-    # If we can't write to startup.log, try writing to a temp file
-    $tempLog = Join-Path $env:TEMP "BTService_startup.log"
-    "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') Failed to write to primary log: $_" | Out-File -FilePath $tempLog
-}
+    Write-Host "Service script starting..."
+    Write-Host "PowerShell Version: $($PSVersionTable.PSVersion)"
+    Write-Host "Running as user: $([System.Security.Principal.WindowsIdentity]::GetCurrent().Name)"
+    Write-Host "Script Path: $PSCommandPath"
+    Write-Host "Working Directory: $PWD"
 
-# Setup logging
-if (![System.Diagnostics.EventLog]::SourceExists("BTKeepAlive")) {
-    New-EventLog -LogName "Application" -Source "BTKeepAlive"
-}
+    # Setup logging
+    if (![System.Diagnostics.EventLog]::SourceExists("BTKeepAlive")) {
+        New-EventLog -LogName "Application" -Source "BTKeepAlive"
+    }
 
-function Write-ServiceLog {
+    function Write-ServiceLog {
     param(
         [string]$Message,
         [string]$Type = "Information"
@@ -77,60 +75,21 @@ public class BluetoothHelper {
         ref uint lpBytesReturned,
         IntPtr lpOverlapped);
 
-    [DllImport("Kernel32.dll", SetLastError = true)]
-    public static extern bool CloseHandle(IntPtr hObject);
+    // ... other DllImport definitions ...
 
-    [DllImport("setupapi.dll", SetLastError = true, CharSet = CharSet.Auto)]
-    public static extern IntPtr SetupDiGetClassDevs(
-        ref Guid ClassGuid,
-        IntPtr Enumerator,
-        IntPtr hwndParent,
-        uint Flags);
-
-    [DllImport("setupapi.dll", SetLastError = true, CharSet = CharSet.Auto)]
-    public static extern bool SetupDiEnumDeviceInterfaces(
-        IntPtr DeviceInfoSet,
-        IntPtr DeviceInfoData,
-        ref Guid InterfaceClassGuid,
-        uint MemberIndex,
-        ref SP_DEVICE_INTERFACE_DATA DeviceInterfaceData);
-
-    [DllImport("setupapi.dll", SetLastError = true, CharSet = CharSet.Auto)]
-    public static extern bool SetupDiGetDeviceInterfaceDetail(
-        IntPtr DeviceInfoSet,
-        ref SP_DEVICE_INTERFACE_DATA DeviceInterfaceData,
-        IntPtr DeviceInterfaceDetailData,
-        uint DeviceInterfaceDetailDataSize,
-        ref uint RequiredSize,
-        IntPtr DeviceInfoData);
-
-    [DllImport("setupapi.dll", SetLastError = true)]
-    public static extern bool SetupDiDestroyDeviceInfoList(IntPtr DeviceInfoSet);
-
-    [StructLayout(LayoutKind.Sequential)]
-    public struct SP_DEVICE_INTERFACE_DATA
-    {
-        public uint cbSize;
-        public Guid InterfaceClassGuid;
-        public uint Flags;
-        public IntPtr Reserved;
-    }
-
-    public const uint DIGCF_PRESENT = 0x2;
-    public const uint DIGCF_DEVICEINTERFACE = 0x10;
-    public const uint GENERIC_READ = 0x80000000;
-    public const uint GENERIC_WRITE = 0x40000000;
-    public const uint FILE_SHARE_READ = 0x00000001;
-    public const uint FILE_SHARE_WRITE = 0x00000002;
+    // Replace these constants with the new ones
+    public const uint DIGCF_PRESENT = 2;
+    public const uint DIGCF_DEVICEINTERFACE = 16;
+    public const uint FILE_SHARE_READ = 1;
+    public const uint FILE_SHARE_WRITE = 2;
     public const uint OPEN_EXISTING = 3;
-    public const uint FILE_ATTRIBUTE_NORMAL = 0x80;
+    public const uint FILE_ATTRIBUTE_NORMAL = 128;
     public const uint ERROR_INSUFFICIENT_BUFFER = 122;
 }
 "@
 
 Add-Type -TypeDefinition $source
 
-# Add this function after the DLL imports and before the main loop
 function Get-BluetoothDevicePath {
     param (
         [string]$DeviceId
@@ -139,9 +98,9 @@ function Get-BluetoothDevicePath {
     try {
         Write-ServiceLog "Starting device path lookup for ID: $DeviceId"
         
-        # Convert device ID to path format using Global prefix
+        # Convert to device interface path format
         $devicePath = $DeviceId.Replace('\', '#')
-        $fullPath = "\\.\Global\$devicePath"
+        $fullPath = "\\.\$devicePath"
         Write-ServiceLog "Created device path: $fullPath"
         
         return $fullPath
@@ -152,6 +111,156 @@ function Get-BluetoothDevicePath {
         return $null
     }
 }
+
+# First, add the Send-BluetoothKeepAlive function
+function Send-BluetoothKeepAlive {
+    param (
+        [string]$DeviceId,
+        [string]$DeviceName
+    )
+    
+    try {
+        Write-ServiceLog "Attempting to send keep-alive to device: $DeviceName"
+        
+        try {
+            $btDevice = Get-PnpDevice -InstanceId $DeviceId -ErrorAction Stop
+            Write-ServiceLog "Found device via PnP: $($btDevice.FriendlyName)"
+            
+            # Query power management properties with detailed decoding
+            Write-ServiceLog "Querying power management properties..."
+            $powerData = Get-PnpDeviceProperty -InstanceId $DeviceId -KeyName DEVPKEY_Device_PowerData
+            if ($powerData) {
+                $bytes = $powerData.Data
+                Write-ServiceLog "Power State: $($bytes[4])"
+            }
+            
+            # Get Bluetooth specific properties
+            $btProps = @{
+                Address = Get-PnpDeviceProperty -InstanceId $DeviceId -KeyName DEVPKEY_Bluetooth_DeviceAddress
+                Flags = Get-PnpDeviceProperty -InstanceId $DeviceId -KeyName DEVPKEY_Bluetooth_DeviceFlags
+                Class = Get-PnpDeviceProperty -InstanceId $DeviceId -KeyName DEVPKEY_Bluetooth_ClassOfDevice
+            }
+            
+            if ($btProps.Flags) {
+                $flags = $btProps.Flags.Data
+                $connected = ($flags -band 0x20) -ne 0
+                Write-ServiceLog "Connection Status: $(if ($connected) { 'Connected' } else { 'Disconnected' })"
+                
+                if ($connected) {
+                    # More aggressive keep-alive approach
+                    Write-ServiceLog "Sending active keep-alive signal..."
+                    
+                    # Temporarily disable and quickly re-enable to force a connection refresh
+                    Disable-PnpDevice -InstanceId $DeviceId -Confirm:$false
+                    Start-Sleep -Milliseconds 100
+                    Enable-PnpDevice -InstanceId $DeviceId -Confirm:$false
+                    Start-Sleep -Milliseconds 100
+                    
+                    # Verify device is back online
+                    $status = (Get-PnpDevice -InstanceId $DeviceId).Status
+                    Write-ServiceLog "Device status after refresh: $status"
+                    
+                    if ($status -eq "OK") {
+                        Write-ServiceLog "Keep-alive refresh successful"
+                        return $true
+                    } else {
+                        Write-ServiceLog "Device not in OK state after refresh" -Type "Warning"
+                        return $false
+                    }
+                }
+                else {
+                    Write-ServiceLog "Device not connected - no keep-alive sent" -Type "Warning"
+                    return $false
+                }
+            }
+            
+        } catch {
+            Write-ServiceLog "Error accessing device: $($_.Exception.Message)" -Type "Error"
+            return $false
+        }
+    }
+    catch {
+        Write-ServiceLog "Error in Send-BluetoothKeepAlive: $($_.Exception.Message)" -Type "Error"
+        Write-ServiceLog "Stack trace: $($_.ScriptStackTrace)" -Type "Error"
+        return $false
+    }
+}
+
+# Then add the Test-StandbyTimeout function
+function Test-StandbyTimeout {
+    param (
+        [string]$DeviceId,
+        [string]$DeviceName
+    )
+    
+    try {
+        Write-ServiceLog "Starting standby timeout detection for: $DeviceName"
+        
+        # Wait for device to be inactive (no audio playing)
+        Write-ServiceLog "Waiting for device to become inactive (no audio playing)..."
+        Start-Sleep -Seconds 30  # Initial wait to ensure no audio is playing
+        
+        # Now start monitoring for standby
+        $startTime = Get-Date
+        $lastStatus = "OK"
+        $standbyDetected = $false
+        
+        Write-ServiceLog "Beginning standby monitoring..."
+        while (-not $standbyDetected -and ((Get-Date) - $startTime).TotalMinutes -lt 30) {
+            $device = Get-PnpDevice -InstanceId $DeviceId -ErrorAction Stop
+            $btProps = Get-PnpDeviceProperty -InstanceId $DeviceId -KeyName DEVPKEY_Bluetooth_DeviceFlags
+            $connected = ($btProps.Data -band 0x20) -ne 0
+            
+            if (-not $connected -or $device.Status -ne "OK") {
+                if ($lastStatus -eq "OK") {
+                    $timeToStandby = ((Get-Date) - $startTime).TotalMinutes
+                    Write-ServiceLog "Standby detected after $timeToStandby minutes"
+                    $standbyDetected = $true
+                    
+                    # Calculate keep-alive interval (80% of standby time)
+                    $keepAliveInterval = [Math]::Floor($timeToStandby * 0.8)
+                    Write-ServiceLog "Setting keep-alive interval to $keepAliveInterval minutes"
+                    
+                    # Store the calculated interval
+                    $config | Add-Member -NotePropertyName "KeepAliveInterval" -NotePropertyValue $keepAliveInterval -Force
+                    $config | ConvertTo-Json | Set-Content -Path $configPath
+                    
+                    return $keepAliveInterval
+                }
+            }
+            
+            $lastStatus = $device.Status
+            Write-ServiceLog "Status check: $($device.Status), Connected: $connected"
+            Start-Sleep -Seconds 30
+        }
+        
+        if (-not $standbyDetected) {
+            Write-ServiceLog "No standby detected after 30 minutes - using default interval" -Type "Warning"
+            return 5  # Default 5-minute interval
+        }
+        
+    } catch {
+        Write-ServiceLog "Error in standby detection: $($_.Exception.Message)" -Type "Error"
+        Write-ServiceLog "Stack trace: $($_.ScriptStackTrace)" -Type "Error"
+        return 5  # Default 5-minute interval on error
+    }
+}
+
+# Set default interval if not configured
+if (-not $config.KeepAliveInterval) {
+    Write-ServiceLog "No keep-alive interval configured - using default 2 minutes"
+    $interval = 2
+    
+    # Store the default interval
+    $config | Add-Member -NotePropertyName "KeepAliveInterval" -NotePropertyValue $interval -Force
+    $config | ConvertTo-Json | Set-Content -Path $configPath
+} else {
+    $interval = $config.KeepAliveInterval
+    Write-ServiceLog "Using configured keep-alive interval: $interval minutes"
+}
+
+# Convert interval to seconds for the sleep timer
+$sleepSeconds = $interval * 60
 
 # Initialize device tracking
 $deviceStatus = @{}
@@ -164,64 +273,45 @@ foreach ($device in $config.devices) {
 
 Write-ServiceLog "Service started, monitoring devices:`n$($config.devices | ForEach-Object { $_.name } | Out-String)"
 
-while ($true) {
-    foreach ($device in $config.devices) {
-        try {
-            $currentDevice = Get-PnpDevice -InstanceId $device.id -ErrorAction Stop
-            Write-ServiceLog "Device status for $($device.name): $($currentDevice.Status)"
-            
-            if ($currentDevice.Status -eq "OK") {
-                $devicePath = Get-BluetoothDevicePath $device.id
-				if ($null -eq $devicePath) {
-					Write-ServiceLog "Could not get device interface path for $($device.name)" -Type "Warning"
-					continue
-				}
-				Write-ServiceLog "Attempting to open device at path: $devicePath"
-                $handle = [BluetoothHelper]::CreateFile(
-                    $devicePath,
-                    [BluetoothHelper]::GENERIC_READ -bor [BluetoothHelper]::GENERIC_WRITE,
-                    [BluetoothHelper]::FILE_SHARE_READ -bor [BluetoothHelper]::FILE_SHARE_WRITE,
-                    [IntPtr]::Zero,
-                    [BluetoothHelper]::OPEN_EXISTING,
-                    [BluetoothHelper]::FILE_ATTRIBUTE_NORMAL,
-                    [IntPtr]::Zero
-                )
+# Main service loop
+try {
+    Write-ServiceLog "Entering main service loop"
+    while ($true) {
+        foreach ($device in $config.devices) {
+            try {
+                $currentDevice = Get-PnpDevice -InstanceId $device.id -ErrorAction Stop
+                Write-ServiceLog "Device status for $($device.name): $($currentDevice.Status)"
                 
-                if ($handle -ne -1) {
-                    $IoControlCode = 0x41248C
-                    Write-ServiceLog "Attempting DeviceIoControl with code: 0x$($IoControlCode.ToString('X'))"
-                    $bytes = 0
-                    $result = [BluetoothHelper]::DeviceIoControl(
-                        $handle,
-                        $IoControlCode,
-                        [IntPtr]::Zero,
-                        0,
-                        [IntPtr]::Zero,
-                        0,
-                        [ref]$bytes,
-                        [IntPtr]::Zero
-                    )
-                    Write-ServiceLog "DeviceIoControl result for $($device.name): $result"
-                    
+                if ($currentDevice.Status -eq "OK") {
+                    $result = Send-BluetoothKeepAlive -DeviceId $device.id -DeviceName $device.name
                     if ($result) {
                         Write-ServiceLog "Keep-alive signal successfully sent to $($device.name)"
-                    } else {
-                        $errorCode = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
-                        Write-ServiceLog "Failed to send keep-alive signal to $($device.name). Error code: $errorCode" -Type "Warning"
                     }
-                    
-                    [BluetoothHelper]::CloseHandle($handle)
-                } else {
-                    $errorCode = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
-                    Write-ServiceLog "Failed to open device handle for $($device.name). Error code: $errorCode" -Type "Warning"
                 }
-            } else {
-                Write-ServiceLog "Device $($device.name) is not in OK state. Current status: $($currentDevice.Status)" -Type "Warning"
+                else {
+                    Write-ServiceLog "Device $($device.name) is not in OK state. Current status: $($currentDevice.Status)" -Type "Warning"
+                }
             }
-        } catch {
-            Write-ServiceLog "Error processing device $($device.name): $($_ | Out-String)" -Type "Error"
-            Write-ServiceLog "Stack trace: $($_.ScriptStackTrace)" -Type "Error"
+            catch {
+                Write-ServiceLog "Error processing device $($device.name): $($_ | Out-String)" -Type "Error"
+                Write-ServiceLog "Stack trace: $($_.ScriptStackTrace)" -Type "Error"
+                # Don't exit on device error, try again next time
+            }
         }
+        Write-ServiceLog "Waiting $interval minutes before next keep-alive signal"
+        Start-Sleep -Seconds $sleepSeconds
     }
-    Start-Sleep -Seconds 15
+}
+catch {
+    Write-ServiceLog "Critical error in main service loop: $($_ | Out-String)" -Type "Error"
+    Write-ServiceLog "Stack trace: $($_.ScriptStackTrace)" -Type "Error"
+    throw  # Re-throw to ensure service shows as failed
+}
+
+} catch {
+    Write-Host "Critical error in service script: $_"
+    Write-Host "Stack trace: $($_.ScriptStackTrace)"
+    throw
+} finally {
+    Stop-Transcript
 }
