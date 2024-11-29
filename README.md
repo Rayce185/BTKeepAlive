@@ -41,6 +41,37 @@ Many Bluetooth speakers and audio devices automatically enter standby mode after
 .\BTKeepAlive.ps1
 ```
 
+### Uninstallation
+
+1. Navigate to the installation directory
+2. Run BTUninstallService.ps1 as Administrator
+
+```txt
+.\BTUninstallService.ps1
+
+```
+
+This will:
+
+* Stop the service if running
+* Remove the service from Windows
+* Clean up service files
+* Remove event log sources
+
+### Quick Update
+
+To update the service with new settings:
+
+1. Simply run BTKeepAlive.ps1 again
+2. Select your devices
+3. The script will automatically:
+   * Stop the existing service
+   * Update configuration
+   * Replace service files
+   * Restart the service
+
+No need to uninstall first - the script handles the update process automatically.
+
 ### Setup Process
 
 1. The script will display a list of available Bluetooth audio devices
@@ -58,7 +89,7 @@ The service creates these files in C:\BTService:
 
 **Default Settings**
 
-* Keep-alive interval: 2 minutes
+* Keep-alive interval: 5 minutes
 * Log rotation: Enabled (1MB limit)
 * Service account: LocalSystem
 * Startup type: Automatic
